@@ -6,8 +6,9 @@
     - [用户名-密码注册](#用户名-密码注册)
     - [用户名-密码登录](#用户名-密码登录)
     - [登出](#登出)
+    - [获取当前用户的信息](#获取当前用户的信息)
     - [获得某一用户信息](#获得某一用户信息)
-    - [修改用户基本信息](#修改用户基本信息)
+    - [修改当前用户信息](#修改当前用户信息)
     - [生成用户appid-appsecret对](#生成用户appid-appsecret对)
     - [获得用户当前持有的appid-appsecret对](#获得用户当前持有的appid-appsecret对)
     - [删除用户appid-appsecret对](#删除用户appid-appsecret对)
@@ -18,7 +19,6 @@
     - [获取一个命名空间下所有包的简要信息](#获取一个命名空间下所有包的简要信息)
     - [删除一个已经存在的包](#删除一个已经存在的包)
     - [为一个包发布新版本](#为一个包发布新版本)
-    - [修改一个包的最新版本的元信息](#修改一个包的最新版本的元信息)
     - [为一个包添加新的合作者](#为一个包添加新的合作者)
     - [获得一个包的所有合作者](#获得一个包的所有合作者)
     - [修改一名合作者的角色](#修改一名合作者的角色)
@@ -30,6 +30,7 @@
     - [为命名空间添加新的成员](#为命名空间添加新的成员)
     - [修改命名空间成员的角色](#修改命名空间成员的角色)
     - [移除命名空间的成员](#移除命名空间的成员)
+
 ## 通用约定
 * 所有返回内容均为`json`
 * 正常响应均返回`200`状态码
@@ -39,12 +40,87 @@
 * 参数错误返回`400`
 * 资源不存在返回`404`
 * 用错误信息区分更细分的错误情况
-* 使用`token`代替`session`进行用户验证时，请设置请求头中的`Token`字段为`token`值
-  
-
+* 使用`token`代替`session`进行用户验证时，请设置请求头中的`X-Auth-Token`字段为`token`值
+* 利用`client_id`以及`secret`生成`token`的方式：
+  1. 序列化请求体并对其进行URL安全的`Base64`编码
+    ```js
+        serialized = urlsafe_base64_encode(serialized_requestBody)
+    ```
+  2. 生成一个UNIX时间戳（单位秒）`timestamp`，和一个128位随机数`random`（都需要进行URL安全的`Base64`编码）
+  3. 将`serialized`、`timestamp`和`random`用英文冒号`:`进行拼接，得到待签名字符串
+    ```js
+        unsignedStr = "<timestamp>:<random>:<serialized>"
+    ```
+  4. 使用`secret`，计算待签名字符串`unsignedStr`的`HMAC-sha1`签名，并对结果进行URL安全的`Base64`编码
+    ```js
+        signature = urlsafe_base64_encode(hmac_sha1(unsignedStr, "<secret>"))
+    ```
+  5. 将`client_id`、`signature`、`<unsignedStr>`用英文冒号`:`顺次连接起来，即得到可以使用的`token`
+    ```js
+        token = "<client_id>:<signature>:<unsignedStr>"
+    ```
+* 用户信息的结构如下。未经特殊说明，所有返回用户完整信息的接口都会返回这一结构的信息。
+  ```js
+    {
+        userid: "userid",
+        username: "username",
+        email: "example@example.com",
+        avatar_uri: "avatar_uri"
+    }
+  ```
+* 包的元信息的结构如下。未经特殊说明，所有返回包完整元信息的接口都会返回这一结构的信息。
+  ```js
+    {
+        meta: {    
+            name: "namespace/package_name",
+            version: "x.y.z[-先行版本号]",
+            dependencies: {
+                ...
+                dependency_n: "x.y.z",
+                ...
+            },
+            dev_dependencies: {
+                ...
+                dependency_n: "x.y.z",
+                ...
+            },
+            type: "PUBLIC",
+            description: "this is a package"
+        }
+        package_id: "package_id",
+        namespace_id: "namespace_id",
+        field: "java",
+        publisher: {
+            user_id: "user_id",
+            username: "username"
+        },
+        last_updated: "yyyy-mm-dd",
+    }
+  ```
+* 命名空间信息的结构如下。未经特殊说明，所有返回命名空间完整信息的接口都会返回这一结构的信息。
+  ```js
+    {
+        namespace_id: "namespace_id",
+        namespace: "namespace_name",
+        owner: "owner_name",
+        member: [
+            ...
+            {
+                username: "username",
+                role: "role",
+                avatar_uri: "avatar_uri"
+            },
+            ...
+        ]
+    }
+  ```
+* 该API文档只涉及要放入平台DB的部分
+    
 ## Todos
 1. 邮箱验证（生成带激活码的验证链接，点击链接后验证激活码并令激活码过期）
 2. 在危险操作（例如删除）之前是否需要用户输入密码或重复包/命名空间的全名以进入`sudo mode`？
+3. 在文件上传时进行token生成，还对整个请求体进行签名吗？
+4. HMAC-sha1足够安全吗？
 
 ## 用户认证系统
 ### 用户名-密码注册
@@ -60,14 +136,6 @@ POST /register
 // 参数错误/缺少参数/用户名存在/邮箱存在，返回400
 ```
 返回非敏感的所有用户信息
-```js
-{
-    userid: "userid",
-    username: "username",
-    email: "example@example.com",
-    avatar_uri: "avatar_uri"
-}
-```
 
 ### 用户名-密码登录
 ```js
@@ -81,38 +149,28 @@ POST /login
 // 参数错误，返回400
 // 用户名不存在或与密码不匹配，返回401
 ```
-返回非敏感的所有用户信息
-```js
-{
-    user_id: "user_id",
-    username: "username",
-    email: "example@example.com",
-    avatar_uri: "avatar_uri",
-}
-```
+返回登录用户的用户信息
 
 ### 登出
 ```js
 GET /logout
 ```
 
+### 获取当前用户的信息
+```js
+GET /me
+```
+返回当前用户的基本信息
+
 ### 获得某一用户信息
 ```js
 GET /users/{username}
 ```
-返回用户的基本信息
-```js
-{
-    user_id: "user_id",
-    username: "username",
-    email: "example@example.com",
-    avatar_uri: "avatar_uri",
-}
-```
+返回指定用户的信息
 
-### 修改用户基本信息
+### 修改当前用户信息
 ```js
-PATCH /settings/profile
+PATCH /me
 {
     user_id: "user_id",
     username: "username",
@@ -121,152 +179,72 @@ PATCH /settings/profile
     avatar_uri: "avatar_uri",
 }
 ```
-返回用户的基本信息
-```js
-{
-    user_id: "user_id",
-    username: "username",
-    email: "example@example.com",
-    avatar_uri: "avatar_uri",
-}
-```
+返回修改后当前用户的信息
 
 ### 生成用户appid-appsecret对
-用户需要根据申请的`appid`和`appsecret`生成`token`进行使用。
+用户需要根据申请的`client_id`和`secret`生成`token`进行使用。
 ```js
-POST /settings/appids
+POST /applications/clients
 {
-    type: "READ_ONLY" // READ_ONLY or PUBLISH or ALL
+    type: "READ_ONLY", // READ_ONLY or PUBLISH or ALL
+    expires: 1602923788 // UNIX时间戳表示的过期时间，单位秒，为0表示永久
 }
 ```
 
 ### 获得用户当前持有的appid-appsecret对
 ```js
-GET /settings/appids
+GET /applications/clients
 ```
-返回用户所有的`appid`-`appsecret`对
+返回用户所有的`client_id`-`secret`对
 ```js
 [
     ...
     {
-        appid: "appid",
-        appsecret: "appsecret",
+        client_id: "client_id",
+        secret: "secret",
         type: "READ_ONLY",
+        expires: 1602923788
     },
     ...
 ]
 ```
 
 ### 删除用户appid-appsecret对
-用户应该定期更新其使用的`appid`-`appsecret`对。
+用户应该定期更新其使用的`client_id`-`secret`对。
 ```js
-DELETE /settings/appids/{appid}
+DELETE /applications/clients/{client_id}
 ```
 
 ## 包管理
 
 ### 创建新包
 `namespace`为一个有效的命名空间名称。用户可以在自己的命名空间（自己的用户名）下创建新包。获得某一命名空间的`MEMBER`角色的用户可以在这一命名空间下创建新包。类型为`PRIVATE`的包只有合作者（collaborator）才可以访问。
+CLI应该将整个包目录中的所有文件打包成单个`.tgz`文件进行上传。
 ```js
 POST /namespaces/{namespace}/packages
-{
-    package_name: "package_name",
-    version: "version",
-    field: "java",
-    dependencies: [
-        {
-            name: "dependency_n",
-            version: "version_n"
-        },
-        ...
-    ],
-    dev_dependencies: [
-        {
-            name: "dependency_n",
-            version: "version_n"
-        },
-        ...
-    ],
-    status: "RELEASE", // 可选，RELEASE or SNAPSHOT(default) (or DEPRECATED?)
-    type: "PUBLIC", // 可选，PUBLIC(default) or PRIVATE
-    description: "this is a package" // 可选，包的描述信息
-}
+Content-Type: multipart/form-data; boundary=<boundary>
+
+--<boundary>
+Content-Disposition:    form-data; name="file"; filename="<filename>"
+Content-Type: application/octet-stream
+Content-Transfer-Encoding: binary
+
+...binary data...
+--<boundary>--
+
 // 成功创建包，返回200
 // 参数错误（缺少参数/包名冲突/namespace id不存在），返回400
 // 未认证返回401
 // 在指定的namespace下没有创建包的权限，返回403
 ```
-创建成功返回包信息
-```js
-{
-    package_id: "package_id",
-    package_name: "package_name",
-    namespace_id: "namespace_id",
-    namespace: "namespace",
-    version: "version",
-    field: "java",
-    dependencies: [
-        ...
-        {
-            name: "dependency_n",
-            version: "version_n"
-        },
-        ...
-    ],
-    dev_dependencies: [
-        ...
-        {
-            name: "dependency_n",
-            version: "version_n"
-        },
-        ...
-    ],
-    status: "RELEASE",
-    publisher_id: "publisher_id",
-    publisher: "publisher_name",
-    type: "PUBLIC",
-    description: "this is a package",
-    last_updated: "yyyy-mm-dd",
-}
-```
+创建成功返回新创建的包的完整信息
 
 ### 获取一个包的信息
 ```js
 GET /namespaces/{namespace}/packages/{package_name}
 ```
-返回指定的包信息
-```js
-{
-    package_id: "package_id",
-    package_name: "package_name",
-    namespace_id: "namespace_id",
-    namespace: "namespace",
-    version: "version",
-    field: "java",
-    dependencies: [
-        ...
-        {
-            name: "dependency_n",
-            version: "version_n"
-        },
-        ...
-    ],
-    dev_dependencies: [
-        ...
-        {
-            name: "dependency_n",
-            version: "version_n"
-        },
-        ...
-    ],
-    status: "RELEASE",
-    publisher_id: "publisher_id",
-    publisher: "publisher_name",
-    type: "PUBLIC",
-    description: "this is a package",
-    last_updated: "yyyy-mm-dd",
-}
-```
+返回指定的包的完整信息
+
 
 ### 搜索符合条件的包的简要信息
 类型为`PRIVATE`的包不会被搜索出来
@@ -280,15 +258,18 @@ GET /packages?query={keyword}[&page={page}]
 [
     ...
     {
-        package_name: "package_name",
+        meta: {
+            name: "namespace/package_name",
+            version: "x.y.z",
+            description: "this is a package"
+        }
         package_id: "package_id",
         namespace_id: "namespace_id",
-        namespace: "namespace",
-        version: "version",
         field: "java",
-        publisher_id: "publisher_id",
-        publisher: "publisher_name",
-        description: "this is a package",
+        publisher: {
+            user_id: "user_id",
+            username: "username",
+        },
         last_updated: "yyyy-mm-dd"
     },
     ...
@@ -306,15 +287,18 @@ GET /namespaces/{namespace}/packages[?page={page}]
 [
     ...
     {
-        package_name: "name",
+        meta: {
+            name: "namespace/package_name",
+            version: "x.y.z",
+            description: "this is a package"
+        }
         package_id: "package_id",
         namespace_id: "namespace_id",
-        namespace: "namespace",
-        version: "version",
         field: "java",
-        publisher_id: "publisher_id",
-        publisher: "publisher_name",
-        description: "this is a package",
+        publisher: {
+            user_id: "user_id",
+            username: "username",
+        },
         last_updated: "yyyy-mm-dd"
     },
     ...
@@ -333,85 +317,20 @@ DELETE /namespaces/{namespace}/packages/{package_name}
 ### 为一个包发布新版本
 ```js
 PUT /namespaces/{namespace}/packages/{package_name}
-{
-    package_id: "package_id",
-    version: "version",
-    dependencies: [
-        {
-            name: "dependency_n",
-            version: "version_n"
-        },
-        ...
-    ],
-    dev_dependencies: [
-        {
-            name: "dependency_n",
-            version: "version_n"
-        },
-        ...
-    ],
-    status: "RELEASE", // 可选，RELEASE or SNAPSHOT(default)
-    type: "PUBLIC" // 可选，PUBLIC(default) or PRIVATE
-}
+Content-Type: multipart/form-data; boundary=<boundary>
+
+--<boundary>
+Content-Disposition:    form-data; name="file"; filename="<filename>"
+Content-Type: application/octet-stream
+Content-Transfer-Encoding: binary
+
+...binary data...
+--<boundary>--
+
 // 成功发布包，返回200
 // 参数错误（缺少参数/package id不存在），返回400
 ```
-发布新版本成功返回包的所有信息
-```js
-{
-    package_id: "package_id",
-    name: "package_name",
-    namespace_id: "namespace_id",
-    namespace: "namespace",
-    version: "version",
-    dependencies: [
-        ...
-        {
-            name: "dependency_n",
-            version: "version_n"
-        },
-        ...
-    ],
-    dev_dependencies: [
-        ...
-        {
-            name: "dependency_n",
-            version: "version_n"
-        },
-        ...
-    ],
-    status: "RELEASE",
-    publisher_id: "publisher_id",
-    publisher: "publisher_name",
-    type: "PUBLIC",
-    description: "this is a package",
-    last_updated: "yyyy-mm-dd",
-}
-```
-
-### 修改一个包的最新版本的元信息
-```js
-PATCH /namespaces/{namespace}/packages/{package_name}
-{
-    package_id: "package_id",
-    dependencies: [
-        {
-            name: "dependency_n",
-            version: "version_n"
-        },
-        ...
-    ],
-    dev_dependencies: [
-        {
-            name: "dependency_n",
-            version: "version_n"
-        },
-        ...
-    ],
-    status: "RELEASE", // 可选，RELEASE or SNAPSHOT(default) or DEPRECATED
-    type: "PUBLIC" // 可选，PUBLIC(default) or PRIVATE
-}
-```
+发布新版本成功返回新版本包的完整信息
 
 ### 为一个包添加新的合作者
 ```js
@@ -435,9 +354,11 @@ GET /namespaces/{namespace}/packages/{package_name}/collaborators
 [
     ...
     {
-        user_id: "user_id",
-        username: "username",
-        avatar_uri: "avatar_uri",
+        collaborator: {
+            user_id: "user_id",
+            username: "username",
+            avatar_uri: "avatar_uri",
+        },
         role: "role"
     },
     ...
@@ -466,45 +387,13 @@ POST /namespace
     namespace: "namespace_name",
 }
 ```
-创建成功返回命名空间信息
-```js
-{
-    namespace_id: "namespace_id",
-    namespace: "namespace_name",
-    owner: "owner_name",
-    member: [
-        ...
-        {
-            username: "username",
-            role: "role",
-            avatar_uri: "avatar_uri"
-        },
-        ...
-    ]
-}
-```
+创建成功返回新建的命名空间信息
 
 ### 获取命名空间信息
 ```js
 GET /namespace/{namespace}
 ```
-返回命名空间信息
-```js
-{
-    namespace_id: "namespace_id",
-    namespace: "namespace_name",
-    owner: "owner_name",
-    member: [
-        ...
-        {
-            username: "username",
-            role: "role",
-            avatar_uri: "avatar_uri"
-        },
-        ...
-    ]
-}
-```
+返回指定的命名空间信息
 
 ### 删除命名空间
 会将命名空间中的所有包一并删除
