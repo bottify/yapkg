@@ -1,11 +1,14 @@
 # yapkg 数据库定义
 - [yapkg 数据库定义](#yapkg-数据库定义)
+  - [说明](#说明)
   - [users 用户表](#users-用户表)
   - [applications 应用表](#applications-应用表)
   - [namespaces 命名空间表](#namespaces-命名空间表)
   - [user_namespace 命名空间成员关系表](#user_namespace-命名空间成员关系表)
   - [packages 包表](#packages-包表)
   - [user_package 包成员关系表](#user_package-包成员关系表)
+## 说明
+* 所有的 `updated_at`, `created_at` 针对的都是 “数据库记录” 的创建和更新时间，因此需要在插入数据/更新数据时对应更新对应的字段。这个习惯/约定是来自于一些其他 ORM 框架。
 ## users 用户表
 * 暂时先不考虑接入 github 等第三方登录
 ```yaml
@@ -13,6 +16,7 @@ id: primary
 username: varchar(63), index
 password: char(63)
 email: varchar(255), index
+status: enum { kPending, kActive, kForbidden } # 暂时先三种，未激活，已激活，已禁用
 created_at: timestamp
 updated_at: timestamp
 ```
